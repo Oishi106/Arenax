@@ -5,11 +5,11 @@ import Navbar from "../components/Navbar";
 import Footer from "../components/Footer";
 import TournamentCard from "../components/TournamentCard";
 import SectionTitle from "../components/SectionTitle";
-import { getTournaments } from "../api";
+import { getTournaments } from "../api";                                 
 
 function Home() {
-  const [featuredTournaments, setFeaturedTournaments] = useState([]);
-  const [loadingTournaments, setLoadingTournaments] = useState(true);
+  const [featuredTournaments, setFeaturedTournaments] = useState([]);                 
+  const [loadingTournaments, setLoadingTournaments] = useState(true);              
 
   useEffect(() => {
     getTournaments()

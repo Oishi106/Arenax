@@ -11,7 +11,7 @@ const UID_FORMAT_REGEX = /^[0-9]{3,20}$/;
 // GET /api/game-accounts/my
 // Get all game accounts belonging to the logged-in user
 router.get("/my", requireAuth, (req, res) => {
-    const userId = req.session.userId;
+    const userId = req.session.userId;     
 
     const sql = `
         SELECT
@@ -38,8 +38,8 @@ router.get("/my", requireAuth, (req, res) => {
         res.status(200).json({
             gameAccounts: results
         });
-    });
-});
+    });       
+});         
 
 
 // POST /api/game-accounts
