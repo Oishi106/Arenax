@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { submitMatchResult } from "../api";
 
-function SubmitResultModal({ isOpen, onClose, onSuccess, match }) {
+function SubmitResultModal({ isOpen, onClose, onSuccess, match, captainTeam }) {
   const [winnerRegId, setWinnerRegId] = useState("");
   const [teamAKills, setTeamAKills] = useState("0");
   const [teamBKills, setTeamBKills] = useState("0");
@@ -70,9 +70,9 @@ function SubmitResultModal({ isOpen, onClose, onSuccess, match }) {
       <div className="w-full max-w-lg rounded-2xl border border-zinc-800 bg-zinc-900 p-6 shadow-2xl space-y-5">
         <div className="flex items-center justify-between border-b border-zinc-800 pb-4">
           <div>
-            <h3 className="text-lg font-bold text-white">Submit Match Result</h3>
+            <h3 className="text-lg font-bold text-white">Submit Match Scorecard</h3>
             <p className="text-xs text-zinc-400 mt-0.5">
-              Match #{match.match_id} • Round {match.round_number || 1}
+              Match #{match.match_id} • Round {match.round_number || 1} • Post-Match Official Report
             </p>
           </div>
           <button
@@ -82,6 +82,33 @@ function SubmitResultModal({ isOpen, onClose, onSuccess, match }) {
             ✕
           </button>
         </div>
+
+        {/* Informational Guidance Banner */}
+        <div className="rounded-xl border border-blue-500/25 bg-blue-500/5 p-3 text-xs text-zinc-300 space-y-1">
+          <div className="flex items-center gap-1.5 font-bold text-blue-400">
+            <span>📋</span>
+            <span>Post-Game Scoreboard Report</span>
+          </div>
+          <p className="text-[11px] text-zinc-400 leading-relaxed">
+            In competitive matches, either participating captain reports the complete post-match scoreboard (both teams' scores &amp; victor). The tournament organizer audits the screenshot proof before confirming progression.
+          </p>
+        </div>
+
+        {/* Captain Identity Verification Card */}
+        {captainTeam && (
+          <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-3 text-xs flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <span className="h-2 w-2 rounded-full bg-emerald-400" />
+              <span className="text-zinc-400">Reporting Captain:</span>
+              <span className="font-bold text-white">
+                {captainTeam.team_name} {captainTeam.team_tag ? `[${captainTeam.team_tag}]` : ""}
+              </span>
+            </div>
+            <span className="rounded bg-emerald-500/20 px-2 py-0.5 text-[10px] font-bold text-emerald-400 border border-emerald-500/30 uppercase">
+              Authorized Captain
+            </span>
+          </div>
+        )}
 
         {errorMsg && (
           <div className="rounded-xl border border-red-500/30 bg-red-500/10 p-3 text-xs text-red-400">
@@ -93,7 +120,7 @@ function SubmitResultModal({ isOpen, onClose, onSuccess, match }) {
           {/* Winner Dropdown */}
           <div>
             <label className="mb-1.5 block text-xs font-semibold text-zinc-300">
-              Winning Team <span className="text-red-500">*</span>
+              Match Winner (Which team won the match?) <span className="text-red-500">*</span>
             </label>
             <select
               value={winnerRegId}
@@ -104,12 +131,14 @@ function SubmitResultModal({ isOpen, onClose, onSuccess, match }) {
               <option value="">-- Select Winner --</option>
               {teamA && (
                 <option value={teamA.registration_id}>
-                  {teamA.team_name} {teamA.team_tag ? `[${teamA.team_tag}]` : ""} (Side A)
+                  {teamA.team_name} {teamA.team_tag ? `[${teamA.team_tag}]` : ""} (Side A){" "}
+                  {captainTeam?.registration_id === teamA.registration_id ? "— [Your Team]" : "— [Opponent]"}
                 </option>
               )}
               {teamB && (
                 <option value={teamB.registration_id}>
-                  {teamB.team_name} {teamB.team_tag ? `[${teamB.team_tag}]` : ""} (Side B)
+                  {teamB.team_name} {teamB.team_tag ? `[${teamB.team_tag}]` : ""} (Side B){" "}
+                  {captainTeam?.registration_id === teamB.registration_id ? "— [Your Team]" : "— [Opponent]"}
                 </option>
               )}
             </select>
@@ -162,6 +191,14 @@ function SubmitResultModal({ isOpen, onClose, onSuccess, match }) {
             <p className="mt-1 text-[11px] text-zinc-500">
               Provide an accessible URL showing the match scoreboard or victory screen.
             </p>
+          </div>
+
+          {/* Integrity Guard Note */}
+          <div className="rounded-xl border border-zinc-800/80 bg-zinc-950/40 p-2.5 text-[11px] text-zinc-400 flex items-start gap-2">
+            <span className="text-xs">🔒</span>
+            <span>
+              <strong>Integrity Guard:</strong> Only the captain of participating teams can submit results. All scores and evidence links are audited and officially confirmed by the tournament organizer before bracket progression.
+            </span>
           </div>
 
           {/* Actions */}

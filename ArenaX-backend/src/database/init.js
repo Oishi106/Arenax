@@ -1,4 +1,11 @@
-const db = require("../config/db");
+const mysql = require("mysql2");
+
+const db = mysql.createConnection({
+    host: "127.0.0.1",
+    user: "root",
+    password: "",
+    port: 3306
+});
 
 const createDatabase = `
     CREATE DATABASE IF NOT EXISTS ArenaX
@@ -184,6 +191,9 @@ function createTables() {
             registration_start_at DATETIME NULL,
             registration_end_at DATETIME NULL,
             prize_pool_usd DECIMAL(12,2) NULL,
+            prize_first_usd DECIMAL(12,2) NULL,
+            prize_second_usd DECIMAL(12,2) NULL,
+            prize_third_usd DECIMAL(12,2) NULL,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 
             FOREIGN KEY (game_id)
@@ -466,9 +476,10 @@ function createTables() {
 function runMigrations(onComplete) {
     const migrations = [
         "ALTER TABLE TOURNAMENT_STAGE MODIFY COLUMN stage_format ENUM('group_stage', 'single_elimination', 'double_elimination') NOT NULL",
+        "ALTER TABLE TOURNAMENT_STAGE ADD COLUMN IF NOT EXISTS group_generation_status ENUM('not_generated', 'groups_assigned', 'matches_generated', 'qualified', 'bracket_generated') NOT NULL DEFAULT 'not_generated'",
         "ALTER TABLE TOURNAMENT_STAGE MODIFY COLUMN group_generation_status ENUM('not_generated', 'groups_assigned', 'matches_generated', 'qualified', 'bracket_generated') NOT NULL DEFAULT 'not_generated'",
-        "ALTER TABLE TOURNAMENT_STAGE ADD COLUMN group_assignment_mode ENUM('sequential', 'random') NULL",
-        "ALTER TABLE TOURNAMENT_STAGE ADD COLUMN groups_generated_at DATETIME NULL",
+        "ALTER TABLE TOURNAMENT_STAGE ADD COLUMN IF NOT EXISTS group_assignment_mode ENUM('sequential', 'random') NULL",
+        "ALTER TABLE TOURNAMENT_STAGE ADD COLUMN IF NOT EXISTS groups_generated_at DATETIME NULL",
         "ALTER TABLE `MATCH` ADD COLUMN group_id INT NULL",
         "ALTER TABLE `MATCH` ADD CONSTRAINT fk_match_group_id FOREIGN KEY (group_id) REFERENCES STAGE_GROUP(group_id) ON DELETE CASCADE",
         "ALTER TABLE `MATCH` ADD COLUMN bracket_type ENUM('group', 'play_in', 'upper', 'lower', 'grand_final') DEFAULT 'group'",

@@ -25,13 +25,6 @@ function Tournaments() {
       ]);
       setTournaments(fetchedTournaments);
       setGames(fetchedGames);
-
-      try {
-        const meData = await getMe();
-        setUser(meData.user);
-      } catch {
-        setUser(null);
-      }
     } catch (error) {
       console.error("Failed to load tournaments:", error);
       if (error.isUnauthenticated) {
@@ -41,6 +34,18 @@ function Tournaments() {
       setLoading(false);
     }
   };
+
+  useEffect(() => {
+    const fetchUser = async () => {
+      try {
+        const meData = await getMe();
+        setUser(meData.user || null);
+      } catch {
+        setUser(null);
+      }
+    };
+    fetchUser();
+  }, []);
 
   useEffect(() => {
     loadData(selectedGameId);

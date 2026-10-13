@@ -6,6 +6,9 @@ function CreateTournamentModal({ isOpen, onClose, onSuccess, games = [], editing
   const [name, setName] = useState("");
   const [format, setFormat] = useState("single_elimination");
   const [prizePoolUsd, setPrizePoolUsd] = useState("");
+  const [prizeFirstUsd, setPrizeFirstUsd] = useState("");
+  const [prizeSecondUsd, setPrizeSecondUsd] = useState("");
+  const [prizeThirdUsd, setPrizeThirdUsd] = useState("");
   const [regStartAt, setRegStartAt] = useState("");
   const [regEndAt, setRegEndAt] = useState("");
 
@@ -41,6 +44,21 @@ function CreateTournamentModal({ isOpen, onClose, onSuccess, games = [], editing
           ? String(editingTournament.prize_pool_usd)
           : ""
       );
+      setPrizeFirstUsd(
+        editingTournament.prize_first_usd !== null && editingTournament.prize_first_usd !== undefined
+          ? String(editingTournament.prize_first_usd)
+          : ""
+      );
+      setPrizeSecondUsd(
+        editingTournament.prize_second_usd !== null && editingTournament.prize_second_usd !== undefined
+          ? String(editingTournament.prize_second_usd)
+          : ""
+      );
+      setPrizeThirdUsd(
+        editingTournament.prize_third_usd !== null && editingTournament.prize_third_usd !== undefined
+          ? String(editingTournament.prize_third_usd)
+          : ""
+      );
       setRegStartAt(formatToInputDate(editingTournament.registration_start_at));
       setRegEndAt(formatToInputDate(editingTournament.registration_end_at));
     } else {
@@ -50,13 +68,37 @@ function CreateTournamentModal({ isOpen, onClose, onSuccess, games = [], editing
       setName("");
       setFormat("single_elimination");
       setPrizePoolUsd("");
+      setPrizeFirstUsd("");
+      setPrizeSecondUsd("");
+      setPrizeThirdUsd("");
       setRegStartAt("");
       setRegEndAt("");
     }
     setErrorMessage("");
-  }, [isOpen, games, editingTournament]);
+  }, [isOpen, games, editingTournament, isEditMode]);
 
   if (!isOpen) return null;
+
+  const parseMoneyField = (rawStr, label) => {
+    if (!rawStr || String(rawStr).trim() === "") {
+      return { valid: true, value: null };
+    }
+    const strVal = String(rawStr).trim();
+    const num = Number(strVal);
+    if (isNaN(num)) {
+      return { valid: false, error: `${label} must be a valid number.` };
+    }
+    if (num < 0) {
+      return { valid: false, error: `${label} cannot be negative.` };
+    }
+    if (strVal.includes(".")) {
+      const decimals = strVal.split(".")[1];
+      if (decimals && decimals.length > 2) {
+        return { valid: false, error: `${label} cannot have more than 2 decimal places.` };
+      }
+    }
+    return { valid: true, value: num };
+  };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -78,26 +120,41 @@ function CreateTournamentModal({ isOpen, onClose, onSuccess, games = [], editing
       }
     }
 
-    let parsedPrize = null;
-    if (prizePoolUsd.trim() !== "") {
-      const strVal = prizePoolUsd.trim();
-      const num = Number(strVal);
-      if (isNaN(num)) {
-        setErrorMessage("Prize pool must be a valid number.");
-        return;
-      }
-      if (num < 0) {
-        setErrorMessage("Prize pool cannot be negative.");
-        return;
-      }
-      if (strVal.includes(".")) {
-        const decimals = strVal.split(".")[1];
-        if (decimals && decimals.length > 2) {
-          setErrorMessage("Prize pool cannot have more than 2 decimal places.");
-          return;
-        }
-      }
-      parsedPrize = num;
+    const totalCheck = parseMoneyField(prizePoolUsd, "Total Prize Pool");
+    if (!totalCheck.valid) {
+      setErrorMessage(totalCheck.error);
+      return;
+    }
+    const firstCheck = parseMoneyField(prizeFirstUsd, "1st Place Prize");
+    if (!firstCheck.valid) {
+      setErrorMessage(firstCheck.error);
+      return;
+    }
+    const secondCheck = parseMoneyField(prizeSecondUsd, "2nd Place Prize");
+    if (!secondCheck.valid) {
+      setErrorMessage(secondCheck.error);
+      return;
+    }
+    const thirdCheck = parseMoneyField(prizeThirdUsd, "3rd Place Prize");
+    if (!thirdCheck.valid) {
+      setErrorMessage(thirdCheck.error);
+      return;
+    }
+
+    const p1 = firstCheck.value;
+    const p2 = secondCheck.value;
+    const p3 = thirdCheck.value;
+    const hasBreakdown = p1 !== null || p2 !== null || p3 !== null;
+    const sumBreakdown = (p1 || 0) + (p2 || 0) + (p3 || 0);
+
+    let finalTotalPrize = totalCheck.value;
+    if (finalTotalPrize === null && hasBreakdown) {
+      finalTotalPrize = sumBreakdown;
+    } else if (finalTotalPrize !== null && hasBreakdown && sumBreakdown > finalTotalPrize + 0.001) {
+      setErrorMessage(
+        `Sum of 1st, 2nd, and 3rd prizes ($${sumBreakdown.toLocaleString()}) cannot exceed Total Prize Pool ($${finalTotalPrize.toLocaleString()}).`
+      );
+      return;
     }
 
     setLoading(true);
@@ -107,7 +164,10 @@ function CreateTournamentModal({ isOpen, onClose, onSuccess, games = [], editing
         game_id: parseInt(gameId, 10),
         name: name.trim(),
         format,
-        prize_pool_usd: parsedPrize,
+        prize_pool_usd: finalTotalPrize,
+        prize_first_usd: p1,
+        prize_second_usd: p2,
+        prize_third_usd: p3,
         registration_start_at: regStartAt ? new Date(regStartAt).toISOString() : null,
         registration_end_at: regEndAt ? new Date(regEndAt).toISOString() : null,
       };
@@ -134,7 +194,7 @@ function CreateTournamentModal({ isOpen, onClose, onSuccess, games = [], editing
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 overflow-y-auto">
-      <div className="w-full max-w-lg rounded-2xl border border-zinc-800 bg-zinc-950 p-6 md:p-8 shadow-2xl">
+      <div className="w-full max-w-lg rounded-2xl border border-zinc-800 bg-zinc-950 p-6 md:p-8 shadow-2xl my-8">
         {/* Header */}
         <div className="flex items-center justify-between border-b border-zinc-800/80 pb-4 mb-6">
           <div>
@@ -143,8 +203,8 @@ function CreateTournamentModal({ isOpen, onClose, onSuccess, games = [], editing
             </h2>
             <p className="text-xs text-zinc-400 mt-1">
               {isEditMode
-                ? "Editable while the tournament is still in draft."
-                : "Set up a new competitive event."}
+                ? "Update tournament details, timeline, and 1st/2nd/3rd prize pool breakdown."
+                : "Set up a new competitive event and prize distribution."}
             </p>
           </div>
           <button
@@ -222,20 +282,72 @@ function CreateTournamentModal({ isOpen, onClose, onSuccess, games = [], editing
             </select>
           </div>
 
-          {/* Prize Pool */}
-          <div>
-            <label className="mb-1.5 block text-xs font-semibold text-zinc-300">
-              Prize Pool ($ USD) <span className="text-zinc-500 font-normal">(Optional)</span>
-            </label>
-            <input
-              type="number"
-              step="0.01"
-              min="0"
-              placeholder="e.g. 1000.00 (leave blank if not specified)"
-              value={prizePoolUsd}
-              onChange={(e) => setPrizePoolUsd(e.target.value)}
-              className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-4 py-2.5 text-sm text-white outline-none placeholder:text-zinc-600 focus:border-red-500"
-            />
+          {/* Total Prize Pool & 1st / 2nd / 3rd Prize Breakdown */}
+          <div className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-4 space-y-3">
+            <div>
+              <label className="mb-1.5 block text-xs font-semibold text-zinc-300">
+                Total Prize Pool ($ USD) <span className="text-zinc-500 font-normal">(Optional)</span>
+              </label>
+              <input
+                type="number"
+                step="0.01"
+                min="0"
+                placeholder="e.g. 500000.00 (or auto-calculated from 1st/2nd/3rd below)"
+                value={prizePoolUsd}
+                onChange={(e) => setPrizePoolUsd(e.target.value)}
+                className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-4 py-2 text-sm text-white outline-none placeholder:text-zinc-600 focus:border-red-500"
+              />
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-1">
+              <div>
+                <label className="mb-1 block text-[11px] font-bold text-amber-400">
+                  🥇 1st Prize ($ USD)
+                </label>
+                <input
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  placeholder="e.g. 250000"
+                  value={prizeFirstUsd}
+                  onChange={(e) => setPrizeFirstUsd(e.target.value)}
+                  className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-xs text-white outline-none placeholder:text-zinc-600 focus:border-amber-500"
+                />
+              </div>
+
+              <div>
+                <label className="mb-1 block text-[11px] font-bold text-slate-300">
+                  🥈 2nd Prize ($ USD)
+                </label>
+                <input
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  placeholder="e.g. 150000"
+                  value={prizeSecondUsd}
+                  onChange={(e) => setPrizeSecondUsd(e.target.value)}
+                  className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-xs text-white outline-none placeholder:text-zinc-600 focus:border-slate-400"
+                />
+              </div>
+
+              <div>
+                <label className="mb-1 block text-[11px] font-bold text-amber-600">
+                  🥉 3rd Prize ($ USD)
+                </label>
+                <input
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  placeholder="e.g. 100000"
+                  value={prizeThirdUsd}
+                  onChange={(e) => setPrizeThirdUsd(e.target.value)}
+                  className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-xs text-white outline-none placeholder:text-zinc-600 focus:border-amber-600"
+                />
+              </div>
+            </div>
+            <p className="text-[11px] text-zinc-500">
+              Specify exact 1st, 2nd, and 3rd place prizes. If Total Prize Pool is left blank, it will be calculated automatically as the sum of 1st + 2nd + 3rd.
+            </p>
           </div>
 
           {/* Registration Timeline */}

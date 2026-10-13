@@ -255,6 +255,10 @@ export async function getTournamentDetails(tournamentId) {
   return data.tournament;
 }
 
+export async function getTournamentHub(tournamentId) {
+  return request(`/tournaments/${tournamentId}/hub`);
+}
+
 export async function createTournament(tournamentData) {
   // tournamentData: { game_id, name, format }
   return request("/tournaments", {
@@ -433,12 +437,28 @@ export async function assignFinalRank(stageId, groupId, memberId, finalRank) {
 }
 
 // Playoff Bracket APIs
-export async function generateBracket(stageId) {
+export async function generateBracket(stageId, data = {}) {
   return request(`/stages/${stageId}/generate-bracket`, {
     method: "POST",
+    body: JSON.stringify(data),
+  });
+}
+
+export async function resetBracket(stageId) {
+  return request(`/stages/${stageId}/bracket`, {
+    method: "DELETE",
   });
 }
 
 export async function getBracket(stageId) {
   return request(`/stages/${stageId}/bracket`);
-}
+}
+
+// Match Scheduling & Configuration APIs
+export async function scheduleMatch(matchId, data) {
+  return request(`/matches/${matchId}/schedule`, {
+    method: "PUT",
+    body: JSON.stringify(data),
+  });
+}
+

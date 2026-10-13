@@ -83,6 +83,7 @@ function Navbar() {
     { label: "Home", path: "/" },
     { label: "About Us", path: "/about" },
     { label: "Tournaments", path: "/tournaments" },
+    ...(user && user.role === "organizer" ? [{ label: "My Tournaments", path: "/my-tournaments" }] : []),
     { label: "Teams", path: "/teams" },
     { label: "Free Agents", path: "/free-agents" },
   ];
@@ -163,6 +164,21 @@ function Navbar() {
                       {user.role || "Player"}
                     </span>
                   </div>
+
+                  {user.role === "organizer" && (
+                    <button
+                      onClick={() => {
+                        setDropdownOpen(false);
+                        navigate("/my-tournaments");
+                      }}
+                      className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2 text-xs font-semibold text-red-400 bg-red-500/10 border border-red-500/20 transition hover:bg-red-500/20 text-left mb-1"
+                    >
+                      <svg className="w-4 h-4 text-red-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+                      </svg>
+                      My Tournaments
+                    </button>
+                  )}
 
                   <button
                     onClick={() => {

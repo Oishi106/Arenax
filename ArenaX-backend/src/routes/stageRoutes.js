@@ -167,6 +167,7 @@ router.get("/:stageId/groups", requireAuth, async (req, res) => {
         if (["matches_generated", "qualified", "bracket_generated"].includes(stage.group_generation_status)) {
             const [matches] = await db.promise().query(
                 `SELECT m.match_id, m.stage_id, m.group_id, m.status, m.round_number, m.bracket_position,
+                        m.scheduled_time, m.lobby_code, m.server_region, m.draft_mode,
                         mr.status AS result_status, mr.winning_registration_id, mr.evidence_url,
                         mp.registration_id, r.team_id, mp.side, tm.team_name, tm.team_tag
                  FROM \`MATCH\` m
@@ -190,6 +191,10 @@ router.get("/:stageId/groups", requireAuth, async (req, res) => {
                         evidence_url: row.evidence_url || null,
                         round_number: row.round_number,
                         bracket_position: row.bracket_position,
+                        scheduled_time: row.scheduled_time || null,
+                        lobby_code: row.lobby_code || null,
+                        server_region: row.server_region || null,
+                        draft_mode: row.draft_mode || null,
                         participants: []
                     });
                 }
@@ -1770,20 +1775,29 @@ router.get("/:stageId/groups/:groupId/standings", requireAuth, async (req, res) 
  * Helper: Generate Double Elimination Playoff Bracket for 4 Teams
  */
 async function generate4TeamBracket(conn, stageId, qualifiedTeams) {
-    const rank1Teams = qualifiedTeams.filter((t) => t.final_rank === 1);
-    const rank2Teams = qualifiedTeams.filter((t) => t.final_rank === 2);
+    let rank1Teams = qualifiedTeams.filter((t) => t.final_rank === 1);
+    let rank2Teams = qualifiedTeams.filter((t) => t.final_rank === 2);
+
+    if (rank1Teams.length === 0 && rank2Teams.length === 0) {
+        rank1Teams = qualifiedTeams.slice(0, 2);
+        rank2Teams = qualifiedTeams.slice(2, 4);
+    }
 
     for (let i = 0; i < rank1Teams.length; i++) {
-        await conn.query(
-            `UPDATE STAGE_GROUP_MEMBER SET playoff_seed = ?, bye_status = FALSE WHERE member_id = ?`,
-            [i + 1, rank1Teams[i].member_id]
-        );
+        if (rank1Teams[i].member_id) {
+            await conn.query(
+                `UPDATE STAGE_GROUP_MEMBER SET playoff_seed = ?, bye_status = FALSE WHERE member_id = ?`,
+                [i + 1, rank1Teams[i].member_id]
+            );
+        }
     }
     for (let i = 0; i < rank2Teams.length; i++) {
-        await conn.query(
-            `UPDATE STAGE_GROUP_MEMBER SET playoff_seed = ?, bye_status = FALSE WHERE member_id = ?`,
-            [rank1Teams.length + i + 1, rank2Teams[i].member_id]
-        );
+        if (rank2Teams[i].member_id) {
+            await conn.query(
+                `UPDATE STAGE_GROUP_MEMBER SET playoff_seed = ?, bye_status = FALSE WHERE member_id = ?`,
+                [rank1Teams.length + i + 1, rank2Teams[i].member_id]
+            );
+        }
     }
 
     // Upper Round 1 Match 1 (Upper Semifinal 1)
@@ -1904,20 +1918,29 @@ async function generate4TeamBracket(conn, stageId, qualifiedTeams) {
  * Helper: Generate Double Elimination Playoff Bracket for 8 Teams
  */
 async function generate8TeamBracket(conn, stageId, qualifiedTeams) {
-    const rank1Teams = qualifiedTeams.filter((t) => t.final_rank === 1);
-    const rank2Teams = qualifiedTeams.filter((t) => t.final_rank === 2);
+    let rank1Teams = qualifiedTeams.filter((t) => t.final_rank === 1);
+    let rank2Teams = qualifiedTeams.filter((t) => t.final_rank === 2);
+
+    if (rank1Teams.length === 0 && rank2Teams.length === 0) {
+        rank1Teams = qualifiedTeams.slice(0, 4);
+        rank2Teams = qualifiedTeams.slice(4, 8);
+    }
 
     for (let i = 0; i < rank1Teams.length; i++) {
-        await conn.query(
-            `UPDATE STAGE_GROUP_MEMBER SET playoff_seed = ?, bye_status = FALSE WHERE member_id = ?`,
-            [i + 1, rank1Teams[i].member_id]
-        );
+        if (rank1Teams[i].member_id) {
+            await conn.query(
+                `UPDATE STAGE_GROUP_MEMBER SET playoff_seed = ?, bye_status = FALSE WHERE member_id = ?`,
+                [i + 1, rank1Teams[i].member_id]
+            );
+        }
     }
     for (let i = 0; i < rank2Teams.length; i++) {
-        await conn.query(
-            `UPDATE STAGE_GROUP_MEMBER SET playoff_seed = ?, bye_status = FALSE WHERE member_id = ?`,
-            [rank1Teams.length + i + 1, rank2Teams[i].member_id]
-        );
+        if (rank2Teams[i].member_id) {
+            await conn.query(
+                `UPDATE STAGE_GROUP_MEMBER SET playoff_seed = ?, bye_status = FALSE WHERE member_id = ?`,
+                [rank1Teams.length + i + 1, rank2Teams[i].member_id]
+            );
+        }
     }
 
     // Upper Round 1 (Quarterfinals: 4 matches, BO1)
@@ -2084,8 +2107,13 @@ async function generate16Or24TeamBracket(conn, stageId, qualifiedTeams) {
     let byeTeams = [];
     let playInTeams = [];
 
-    const rank1Teams = qualifiedTeams.filter((t) => t.final_rank === 1);
-    const rank2Teams = qualifiedTeams.filter((t) => t.final_rank === 2);
+    let rank1Teams = qualifiedTeams.filter((t) => t.final_rank === 1);
+    let rank2Teams = qualifiedTeams.filter((t) => t.final_rank === 2);
+
+    if (rank1Teams.length === 0 && rank2Teams.length === 0) {
+        rank1Teams = qualifiedTeams.slice(0, Math.ceil(totalQual / 2));
+        rank2Teams = qualifiedTeams.slice(Math.ceil(totalQual / 2));
+    }
 
     if (playInCount > 0) {
         byeTeams = rank1Teams.slice(0, byeCount);
@@ -2096,16 +2124,20 @@ async function generate16Or24TeamBracket(conn, stageId, qualifiedTeams) {
     }
 
     for (let i = 0; i < byeTeams.length; i++) {
-        await conn.query(
-            `UPDATE STAGE_GROUP_MEMBER SET playoff_seed = ?, bye_status = TRUE WHERE member_id = ?`,
-            [i + 1, byeTeams[i].member_id]
-        );
+        if (byeTeams[i].member_id) {
+            await conn.query(
+                `UPDATE STAGE_GROUP_MEMBER SET playoff_seed = ?, bye_status = TRUE WHERE member_id = ?`,
+                [i + 1, byeTeams[i].member_id]
+            );
+        }
     }
     for (let i = 0; i < playInTeams.length; i++) {
-        await conn.query(
-            `UPDATE STAGE_GROUP_MEMBER SET playoff_seed = ?, bye_status = FALSE WHERE member_id = ?`,
-            [byeCount + i + 1, playInTeams[i].member_id]
-        );
+        if (playInTeams[i].member_id) {
+            await conn.query(
+                `UPDATE STAGE_GROUP_MEMBER SET playoff_seed = ?, bye_status = FALSE WHERE member_id = ?`,
+                [byeCount + i + 1, playInTeams[i].member_id]
+            );
+        }
     }
 
     const playInMatches = [];
@@ -2370,6 +2402,128 @@ async function generate16Or24TeamBracket(conn, stageId, qualifiedTeams) {
         upperMatchesCount: upperR1Matches.length + upperQFMatches.length + upperSFMatches.length + 1,
         lowerMatchesCount: lowerR1Matches.length + lowerR2Matches.length + lowerR3Matches.length + lowerR4Matches.length + 1 + 1,
         grandFinalMatchId: grandFinalMatch
+    };
+}
+
+/**
+ * Main dispatcher: Generate Single Elimination Bracket
+ * Supports 2, 4, 8, 16, 32 teams with BYEs, series BO configuration, and BRACKET_ADVANCEMENT rules.
+ */
+async function generateSingleEliminationBracket(conn, stageId, teams) {
+    // 1. Clean up any existing bracket matches for this stage
+    await conn.query("DELETE FROM `MATCH` WHERE stage_id = ? AND bracket_type != 'group'", [stageId]);
+
+    const totalTeams = teams.length;
+    if (totalTeams < 2) {
+        throw new Error("AT LEAST 2 TEAMS REQUIRED FOR SINGLE ELIMINATION BRACKET");
+    }
+
+    // Determine target bracket power of 2: P >= totalTeams (e.g. 2, 4, 8, 16, 32)
+    let P = 2;
+    while (P < totalTeams) {
+        P *= 2;
+    }
+    const totalRounds = Math.log2(P);
+
+    // Map: roundNumber (1..totalRounds) -> array of match IDs
+    const roundMatches = {};
+    for (let r = 1; r <= totalRounds; r++) {
+        roundMatches[r] = [];
+        const matchesInRound = P / Math.pow(2, r);
+        const isFinal = (r === totalRounds);
+        const isSemi = (r === totalRounds - 1 && totalRounds > 1);
+        const bestOf = isFinal ? "BO5" : (isSemi ? "BO3" : "BO1");
+        const bType = isFinal ? "grand_final" : "upper";
+
+        for (let pos = 1; pos <= matchesInRound; pos++) {
+            const [mRes] = await conn.query(
+                `INSERT INTO \`MATCH\` (stage_id, status, round_number, bracket_position, bracket_type)
+                 VALUES (?, 'scheduled', ?, ?, ?)`,
+                [stageId, r, pos, bType]
+            );
+            const mId = mRes.insertId;
+            await conn.query(`INSERT INTO MOBA_SERIES (match_id, best_of) VALUES (?, ?)`, [mId, bestOf]);
+            roundMatches[r].push(mId);
+        }
+    }
+
+    // Connect BRACKET_ADVANCEMENT between rounds
+    for (let r = 1; r < totalRounds; r++) {
+        const matchesInRound = roundMatches[r].length;
+        for (let i = 0; i < matchesInRound; i++) {
+            const sourceMatchId = roundMatches[r][i];
+            const destIndex = Math.floor(i / 2);
+            const destinationMatchId = roundMatches[r + 1][destIndex];
+            const destinationSide = (i % 2 === 0) ? "A" : "B";
+
+            await conn.query(
+                `INSERT INTO BRACKET_ADVANCEMENT (source_match_id, destination_match_id, outcome_type, destination_side)
+                 VALUES (?, ?, 'winner', ?)`,
+                [sourceMatchId, destinationMatchId, destinationSide]
+            );
+        }
+    }
+
+    // Seed Round 1 matches
+    const round1Count = P / 2;
+    const byeCount = P - totalTeams;
+
+    let teamIdx = 0;
+    for (let k = 0; k < round1Count; k++) {
+        const mId = roundMatches[1][k];
+        const teamA = teams[teamIdx++];
+        let teamB = null;
+
+        if (k >= byeCount && teamIdx < totalTeams) {
+            teamB = teams[teamIdx++];
+        } else if (teamIdx < totalTeams && (round1Count - k - 1) * 2 + 1 < (totalTeams - teamIdx + 1)) {
+            teamB = teams[teamIdx++];
+        }
+
+        if (teamA) {
+            await conn.query(
+                `INSERT INTO MATCH_PARTICIPANT (match_id, registration_id, side) VALUES (?, ?, 'A')`,
+                [mId, teamA.registration_id]
+            );
+        }
+
+        if (teamB) {
+            await conn.query(
+                `INSERT INTO MATCH_PARTICIPANT (match_id, registration_id, side) VALUES (?, ?, 'B')`,
+                [mId, teamB.registration_id]
+            );
+        } else if (teamA && totalRounds > 1) {
+            // Team A has a BYE in Round 1: Mark match completed and auto-advance to Round 2
+            await conn.query(
+                `UPDATE \`MATCH\` SET status = 'completed' WHERE match_id = ?`,
+                [mId]
+            );
+
+            const destIndex = Math.floor(k / 2);
+            const destinationMatchId = roundMatches[2][destIndex];
+            const destinationSide = (k % 2 === 0) ? "A" : "B";
+
+            await conn.query(
+                `INSERT INTO MATCH_PARTICIPANT (match_id, registration_id, side) VALUES (?, ?, ?)`,
+                [destinationMatchId, teamA.registration_id, destinationSide]
+            );
+        }
+    }
+
+    // Ensure any destination matches with both participants filled are marked as scheduled
+    await conn.query(
+        `UPDATE \`MATCH\` m
+         SET status = 'scheduled'
+         WHERE stage_id = ? AND status = 'scheduled' AND (
+            SELECT COUNT(*) FROM MATCH_PARTICIPANT mp WHERE mp.match_id = m.match_id
+         ) = 2`,
+        [stageId]
+    );
+
+    return {
+        totalRounds,
+        totalMatches: P - 1,
+        grandFinalMatchId: roundMatches[totalRounds][0]
     };
 }
 
@@ -2712,11 +2866,16 @@ router.put("/:stageId/groups/:groupId/members/:memberId/rank", requireAuth, requ
 
 /**
  * POST /api/stages/:stageId/generate-bracket
- * Organizer-only endpoint to generate the Double Elimination playoff bracket.
+ * Organizer-only endpoint to generate either Single Elimination or Double Elimination bracket.
+ * Sourced from:
+ * 1) Top qualified teams if stage is 'group_stage' (or previous stage had group qualification).
+ * 2) Approved tournament registrations if standalone stage.
  */
 router.post("/:stageId/generate-bracket", requireAuth, requireRole("organizer"), async (req, res) => {
     const stageId = req.params.stageId;
     const organizerId = req.session.userId;
+    const { seeding_mode, seedingMode } = req.body || {};
+    const mode = seeding_mode || seedingMode || "sequential";
 
     let conn;
     try {
@@ -2724,7 +2883,7 @@ router.post("/:stageId/generate-bracket", requireAuth, requireRole("organizer"),
         await conn.beginTransaction();
 
         const [stages] = await conn.query(
-            `SELECT ts.stage_id, ts.tournament_id, ts.stage_format, ts.group_generation_status,
+            `SELECT ts.stage_id, ts.tournament_id, ts.stage_order, ts.stage_format, ts.group_generation_status,
                     t.organizer_id, t.status AS tournament_status
              FROM TOURNAMENT_STAGE ts
              JOIN TOURNAMENT t ON ts.tournament_id = t.tournament_id
@@ -2750,35 +2909,99 @@ router.post("/:stageId/generate-bracket", requireAuth, requireRole("organizer"),
             });
         }
 
-        if (stage.group_generation_status !== "qualified") {
+        if (stage.tournament_status === "completed") {
             await conn.rollback();
             return res.status(409).json({
-                error: "PLAYOFF BRACKET CAN ONLY BE GENERATED AFTER GROUP QUALIFICATION IS COMPLETED",
+                error: "CANNOT GENERATE BRACKET FOR A COMPLETED TOURNAMENT",
                 code: "STATE_CONFLICT"
             });
         }
 
-        const [qualifiedMembers] = await conn.query(
-            `SELECT sgm.member_id, sgm.group_id, sgm.stage_id, sgm.registration_id, sgm.final_rank,
-                    sg.group_name, sg.group_order, r.team_id, tm.team_name, tm.team_tag
-             FROM STAGE_GROUP_MEMBER sgm
-             JOIN STAGE_GROUP sg ON sgm.group_id = sg.group_id
-             JOIN REGISTRATION r ON sgm.registration_id = r.registration_id
-             JOIN TEAM tm ON r.team_id = tm.team_id
-             WHERE sgm.stage_id = ? AND sgm.qualified = TRUE
-             ORDER BY sg.group_order ASC, sgm.final_rank ASC FOR UPDATE`,
-            [stageId]
-        );
+        let candidateTeams = [];
 
-        if (qualifiedMembers.length < 4 || qualifiedMembers.length % 2 !== 0) {
+        if (stage.stage_format === "group_stage") {
+            if (stage.group_generation_status !== "qualified") {
+                await conn.rollback();
+                return res.status(409).json({
+                    error: "PLAYOFF BRACKET CAN ONLY BE GENERATED AFTER GROUP QUALIFICATION IS COMPLETED",
+                    code: "STATE_CONFLICT"
+                });
+            }
+
+            const [qualifiedMembers] = await conn.query(
+                `SELECT sgm.member_id, sgm.group_id, sgm.stage_id, sgm.registration_id, sgm.final_rank,
+                        sg.group_name, sg.group_order, r.team_id, tm.team_name, tm.team_tag
+                 FROM STAGE_GROUP_MEMBER sgm
+                 JOIN STAGE_GROUP sg ON sgm.group_id = sg.group_id
+                 JOIN REGISTRATION r ON sgm.registration_id = r.registration_id
+                 JOIN TEAM tm ON r.team_id = tm.team_id
+                 WHERE sgm.stage_id = ? AND sgm.qualified = TRUE
+                 ORDER BY sg.group_order ASC, sgm.final_rank ASC FOR UPDATE`,
+                [stageId]
+            );
+            candidateTeams = qualifiedMembers;
+        } else {
+            // Standalone single_elimination or double_elimination stage
+            // Check if there was a preceding group stage in this tournament with qualified members:
+            const [prevQualified] = await conn.query(
+                `SELECT sgm.member_id, sgm.group_id, sgm.stage_id, sgm.registration_id, sgm.final_rank,
+                        sg.group_name, sg.group_order, r.team_id, tm.team_name, tm.team_tag
+                 FROM TOURNAMENT_STAGE prev_ts
+                 JOIN STAGE_GROUP_MEMBER sgm ON prev_ts.stage_id = sgm.stage_id
+                 JOIN STAGE_GROUP sg ON sgm.group_id = sg.group_id
+                 JOIN REGISTRATION r ON sgm.registration_id = r.registration_id
+                 JOIN TEAM tm ON r.team_id = tm.team_id
+                 WHERE prev_ts.tournament_id = ? AND prev_ts.stage_order < ? AND sgm.qualified = TRUE
+                 ORDER BY prev_ts.stage_order DESC, sg.group_order ASC, sgm.final_rank ASC FOR UPDATE`,
+                [stage.tournament_id, stage.stage_order]
+            );
+
+            if (prevQualified.length > 0) {
+                candidateTeams = prevQualified;
+            } else {
+                // Source directly from approved tournament registrations
+                const [approvedRegs] = await conn.query(
+                    `SELECT r.registration_id, r.team_id, r.seed_number, tm.team_name, tm.team_tag
+                     FROM REGISTRATION r
+                     JOIN TEAM tm ON r.team_id = tm.team_id
+                     WHERE r.tournament_id = ? AND r.status = 'approved'
+                     ORDER BY COALESCE(r.seed_number, 999999) ASC, r.registered_at ASC FOR UPDATE`,
+                    [stage.tournament_id]
+                );
+                candidateTeams = approvedRegs;
+            }
+        }
+
+        if (candidateTeams.length < 2) {
             await conn.rollback();
             return res.status(400).json({
-                error: `INVALID QUALIFIED TEAM COUNT (${qualifiedMembers.length}). MUST BE EVEN AND AT LEAST 4.`,
+                error: `AT LEAST 2 APPROVED TEAMS ARE REQUIRED TO GENERATE A BRACKET (FOUND: ${candidateTeams.length})`,
                 code: "INVALID_INPUT"
             });
         }
 
-        const bracketStats = await generateDoubleEliminationBracket(conn, stageId, qualifiedMembers);
+        // Apply seeding mode
+        if (mode === "random") {
+            for (let i = candidateTeams.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [candidateTeams[i], candidateTeams[j]] = [candidateTeams[j], candidateTeams[i]];
+            }
+        }
+
+        let bracketStats;
+        if (stage.stage_format === "single_elimination") {
+            bracketStats = await generateSingleEliminationBracket(conn, stageId, candidateTeams);
+        } else {
+            // double_elimination or group_stage playoff
+            if (candidateTeams.length < 4 || candidateTeams.length % 2 !== 0) {
+                await conn.rollback();
+                return res.status(400).json({
+                    error: `DOUBLE ELIMINATION REQUIRES AN EVEN NUMBER OF AT LEAST 4 TEAMS (FOUND: ${candidateTeams.length})`,
+                    code: "INVALID_INPUT"
+                });
+            }
+            bracketStats = await generateDoubleEliminationBracket(conn, stageId, candidateTeams);
+        }
 
         await conn.query(
             `UPDATE TOURNAMENT_STAGE SET group_generation_status = 'bracket_generated' WHERE stage_id = ?`,
@@ -2788,9 +3011,10 @@ router.post("/:stageId/generate-bracket", requireAuth, requireRole("organizer"),
         await conn.commit();
 
         return res.status(201).json({
-            message: "Playoff double elimination bracket generated successfully",
+            message: `${stage.stage_format === "single_elimination" ? "Single" : "Double"} elimination bracket generated successfully`,
             stageId: Number(stageId),
-            qualifiedTeamsCount: qualifiedMembers.length,
+            stageFormat: stage.stage_format,
+            teamsCount: candidateTeams.length,
             stats: bracketStats
         });
     } catch (err) {
@@ -2798,6 +3022,90 @@ router.post("/:stageId/generate-bracket", requireAuth, requireRole("organizer"),
         console.error(err);
         return res.status(500).json({
             error: "FAILED TO GENERATE BRACKET",
+            code: "INTERNAL_SERVER_ERROR"
+        });
+    } finally {
+        if (conn) conn.release();
+    }
+});
+
+/**
+ * DELETE /api/stages/:stageId/bracket
+ * Organizer-only endpoint to reset/clear generated bracket for a stage.
+ */
+router.delete("/:stageId/bracket", requireAuth, requireRole("organizer"), async (req, res) => {
+    const stageId = req.params.stageId;
+    const organizerId = req.session.userId;
+
+    let conn;
+    try {
+        conn = await db.promise().getConnection();
+        await conn.beginTransaction();
+
+        const [stages] = await conn.query(
+            `SELECT ts.stage_id, ts.tournament_id, ts.stage_format, ts.group_generation_status,
+                    t.organizer_id, t.status AS tournament_status
+             FROM TOURNAMENT_STAGE ts
+             JOIN TOURNAMENT t ON ts.tournament_id = t.tournament_id
+             WHERE ts.stage_id = ? FOR UPDATE`,
+            [stageId]
+        );
+
+        if (stages.length === 0) {
+            await conn.rollback();
+            return res.status(404).json({ error: "STAGE NOT FOUND", code: "NOT_FOUND" });
+        }
+
+        const stage = stages[0];
+
+        if (stage.organizer_id !== organizerId) {
+            await conn.rollback();
+            return res.status(403).json({ error: "YOU DO NOT OWN THIS TOURNAMENT", code: "FORBIDDEN" });
+        }
+
+        if (stage.tournament_status === "completed") {
+            await conn.rollback();
+            return res.status(409).json({ error: "CANNOT RESET BRACKET OF A COMPLETED TOURNAMENT", code: "STATE_CONFLICT" });
+        }
+
+        // Check if any match in this stage already has a VERIFIED result
+        const [verifiedMatches] = await conn.query(
+            `SELECT COUNT(*) AS cnt
+             FROM \`MATCH\` m
+             JOIN MATCH_RESULT mr ON m.match_id = mr.match_id
+             WHERE m.stage_id = ? AND m.bracket_type != 'group' AND mr.status = 'VERIFIED'`,
+            [stageId]
+        );
+
+        if (verifiedMatches[0].cnt > 0) {
+            await conn.rollback();
+            return res.status(409).json({
+                error: "CANNOT RESET BRACKET - ONE OR MORE MATCH RESULTS HAVE ALREADY BEEN VERIFIED",
+                code: "STATE_CONFLICT"
+            });
+        }
+
+        // Delete bracket matches (ON DELETE CASCADE removes MATCH_PARTICIPANT, BRACKET_ADVANCEMENT, MOBA_SERIES, unverified MATCH_RESULT)
+        await conn.query("DELETE FROM `MATCH` WHERE stage_id = ? AND bracket_type != 'group'", [stageId]);
+
+        const nextStatus = stage.stage_format === "group_stage" ? "qualified" : "not_generated";
+        await conn.query(
+            "UPDATE TOURNAMENT_STAGE SET group_generation_status = ? WHERE stage_id = ?",
+            [nextStatus, stageId]
+        );
+
+        await conn.commit();
+
+        return res.status(200).json({
+            message: "Bracket reset successfully",
+            stageId: Number(stageId),
+            groupGenerationStatus: nextStatus
+        });
+    } catch (err) {
+        if (conn) await conn.rollback();
+        console.error(err);
+        return res.status(500).json({
+            error: "FAILED TO RESET BRACKET",
             code: "INTERNAL_SERVER_ERROR"
         });
     } finally {
@@ -2815,7 +3123,7 @@ router.get("/:stageId/bracket", requireAuth, async (req, res) => {
 
     try {
         const [stages] = await db.promise().query(
-            `SELECT ts.stage_id, ts.tournament_id, ts.group_generation_status,
+            `SELECT ts.stage_id, ts.tournament_id, ts.stage_format, ts.group_generation_status,
                     t.organizer_id, t.status AS tournament_status
              FROM TOURNAMENT_STAGE ts
              JOIN TOURNAMENT t ON ts.tournament_id = t.tournament_id
@@ -2842,7 +3150,9 @@ router.get("/:stageId/bracket", requireAuth, async (req, res) => {
 
         const [matches] = await db.promise().query(
             `SELECT m.match_id, m.stage_id, m.status, m.round_number, m.bracket_position, m.bracket_type,
+                    m.scheduled_time, m.lobby_code, m.server_region, m.draft_mode,
                     mr.status AS result_status, mr.winning_registration_id,
+                    mr.team_a_kills, mr.team_b_kills, mr.evidence_url, mr.submitted_at, mr.verified_at,
                     ms.best_of, ms.series_winner_registration_id
              FROM \`MATCH\` m
              LEFT JOIN MATCH_RESULT mr ON m.match_id = mr.match_id
@@ -2889,8 +3199,17 @@ router.get("/:stageId/bracket", requireAuth, async (req, res) => {
             round_number: m.round_number,
             bracket_position: m.bracket_position,
             status: m.status,
+            scheduled_time: m.scheduled_time || null,
+            lobby_code: m.lobby_code || null,
+            server_region: m.server_region || null,
+            draft_mode: m.draft_mode || null,
             result_status: m.result_status || null,
             winning_registration_id: m.winning_registration_id || null,
+            team_a_kills: m.team_a_kills != null ? Number(m.team_a_kills) : null,
+            team_b_kills: m.team_b_kills != null ? Number(m.team_b_kills) : null,
+            evidence_url: m.evidence_url || null,
+            submitted_at: m.submitted_at || null,
+            verified_at: m.verified_at || null,
             best_of: m.best_of || "BO1",
             participants: partsMap.get(m.match_id) || [],
             advancements: advMap.get(m.match_id) || []
@@ -2900,6 +3219,10 @@ router.get("/:stageId/bracket", requireAuth, async (req, res) => {
             stageId: Number(stageId),
             tournamentId: stage.tournament_id,
             tournament_id: stage.tournament_id,
+            tournamentStatus: stage.tournament_status,
+            tournament_status: stage.tournament_status,
+            stageFormat: stage.stage_format,
+            stage_format: stage.stage_format,
             groupGenerationStatus: stage.group_generation_status,
             bracket: {
                 playIn: formattedMatches.filter((m) => m.bracket_type === "play_in"),

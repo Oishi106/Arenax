@@ -193,6 +193,20 @@ function MyTournaments() {
                     <h3 className="text-lg font-bold text-white">{t.name}</h3>
                     <p className="text-xs text-zinc-500 mt-1 capitalize">
                       Format: {t.format.replace("_", " ")}
+                      {t.prize_pool_usd !== null && t.prize_pool_usd !== undefined && Number(t.prize_pool_usd) > 0 && (
+                        <span className="ml-2 text-emerald-400 font-semibold">
+                          • Total Prize: ${Number(t.prize_pool_usd).toLocaleString()} USD
+                        </span>
+                      )}
+                      {(t.prize_first_usd || t.prize_second_usd || t.prize_third_usd) && (
+                        <span className="ml-2 text-zinc-400 normal-case">
+                          (
+                          {t.prize_first_usd ? `🥇 $${Number(t.prize_first_usd).toLocaleString()}` : ""}
+                          {t.prize_second_usd ? ` • 🥈 $${Number(t.prize_second_usd).toLocaleString()}` : ""}
+                          {t.prize_third_usd ? ` • 🥉 $${Number(t.prize_third_usd).toLocaleString()}` : ""}
+                          )
+                        </span>
+                      )}
                     </p>
                     {actionErrorId === t.tournament_id && (
                       <p className="text-xs text-red-400 mt-2">{actionErrorMsg}</p>
@@ -220,7 +234,7 @@ function MyTournaments() {
                       Stages
                     </Link>
 
-                    {t.status === "draft" && (
+                    {["draft", "published"].includes(t.status) && (
                       <button
                         onClick={() => handleEditClick(t)}
                         className="rounded-lg border border-zinc-700 px-4 py-2 text-xs font-semibold text-zinc-300 transition hover:border-zinc-500 hover:text-white"

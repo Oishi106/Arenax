@@ -690,6 +690,15 @@ function PublicGroupStageView({ stageId, tournamentId, onToast, initialTab }) {
       <SubmitResultModal
         isOpen={Boolean(selectedMatchForSubmit)}
         match={selectedMatchForSubmit}
+        captainTeam={
+          selectedMatchForSubmit
+            ? (selectedMatchForSubmit.participants || []).find(
+                (p) =>
+                  (p.team_id && myCaptainTeamIds.includes(Number(p.team_id))) ||
+                  (p.registration_id && myCaptainRegIds.includes(Number(p.registration_id)))
+              )
+            : null
+        }
         onClose={() => setSelectedMatchForSubmit(null)}
         onSuccess={(msg) => {
           fetchStageData();

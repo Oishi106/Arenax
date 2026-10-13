@@ -36,6 +36,9 @@ router.get("/", requireAuth, (req, res) => {
             t.registration_start_at,
             t.registration_end_at,
             t.prize_pool_usd,
+            t.prize_first_usd,
+            t.prize_second_usd,
+            t.prize_third_usd,
             t.created_at,
             g.game_id,
             g.game_name,
@@ -78,6 +81,9 @@ router.get("/", requireAuth, (req, res) => {
         const enriched = results.map((t) => ({
             ...t,
             prize_pool_usd: t.prize_pool_usd !== null ? Number(t.prize_pool_usd) : null,
+            prize_first_usd: t.prize_first_usd !== null ? Number(t.prize_first_usd) : null,
+            prize_second_usd: t.prize_second_usd !== null ? Number(t.prize_second_usd) : null,
+            prize_third_usd: t.prize_third_usd !== null ? Number(t.prize_third_usd) : null,
             registration_status: getRegistrationStatus(t, t.active_group_stages)
         }));
 
@@ -105,6 +111,9 @@ router.get("/my", requireAuth, requireRole("organizer"), (req, res) => {
             t.registration_start_at,
             t.registration_end_at,
             t.prize_pool_usd,
+            t.prize_first_usd,
+            t.prize_second_usd,
+            t.prize_third_usd,
             t.created_at,
             g.game_id,
             g.game_name,
@@ -126,6 +135,9 @@ router.get("/my", requireAuth, requireRole("organizer"), (req, res) => {
         const enriched = results.map((t) => ({
             ...t,
             prize_pool_usd: t.prize_pool_usd !== null ? Number(t.prize_pool_usd) : null,
+            prize_first_usd: t.prize_first_usd !== null ? Number(t.prize_first_usd) : null,
+            prize_second_usd: t.prize_second_usd !== null ? Number(t.prize_second_usd) : null,
+            prize_third_usd: t.prize_third_usd !== null ? Number(t.prize_third_usd) : null,
             registration_status: getRegistrationStatus(t, t.active_group_stages)
         }));
 
@@ -154,6 +166,9 @@ router.get("/:id", requireAuth, (req, res) => {
             t.registration_start_at,
             t.registration_end_at,
             t.prize_pool_usd,
+            t.prize_first_usd,
+            t.prize_second_usd,
+            t.prize_third_usd,
             t.created_at,
             g.game_id,
             g.game_name,
@@ -191,12 +206,434 @@ router.get("/:id", requireAuth, (req, res) => {
         }
 
         tournament.prize_pool_usd = tournament.prize_pool_usd !== null ? Number(tournament.prize_pool_usd) : null;
+        tournament.prize_first_usd = tournament.prize_first_usd !== null ? Number(tournament.prize_first_usd) : null;
+        tournament.prize_second_usd = tournament.prize_second_usd !== null ? Number(tournament.prize_second_usd) : null;
+        tournament.prize_third_usd = tournament.prize_third_usd !== null ? Number(tournament.prize_third_usd) : null;
         tournament.registration_status = getRegistrationStatus(tournament, tournament.active_group_stages);
 
         return res.status(200).json({
             tournament: tournament
         });
     });
+});
+
+/**
+ * GET /api/tournaments/:id/hub
+ * Returns comprehensive tournament hub data for Groups & Teams, Standings, and Matches tabs:
+ * - participants: approved & pending registered teams with full player rosters and group/seed metadata
+ * - matches: all matches across all stages (group, play_in, upper, lower, grand_final)
+ * - standings: live tournament leaderboard with match W/L, kills, kill diff, bracket status, and placements
+ */
+router.get("/:id/hub", async (req, res) => {
+    const tournamentId = req.params.id;
+    const userId = req.session ? req.session.userId : null;
+
+    try {
+        const [tournaments] = await db.promise().query(
+            `SELECT t.tournament_id, t.name, t.format, t.status,
+                    t.prize_pool_usd, t.prize_first_usd, t.prize_second_usd, t.prize_third_usd,
+                    t.organizer_id, t.registration_start_at, t.registration_end_at
+             FROM TOURNAMENT t
+             WHERE t.tournament_id = ?`,
+            [tournamentId]
+        );
+
+        if (tournaments.length === 0) {
+            return res.status(404).json({ error: "TOURNAMENT NOT FOUND" });
+        }
+
+        const tournament = tournaments[0];
+        const isOwner = Number(tournament.organizer_id) === Number(userId);
+
+        if (tournament.status === "draft" && !isOwner) {
+            return res.status(404).json({ error: "TOURNAMENT NOT FOUND" });
+        }
+
+        const prizePool = tournament.prize_pool_usd !== null ? Number(tournament.prize_pool_usd) : null;
+        const prizeFirst = tournament.prize_first_usd !== null ? Number(tournament.prize_first_usd) : null;
+        const prizeSecond = tournament.prize_second_usd !== null ? Number(tournament.prize_second_usd) : null;
+        const prizeThird = tournament.prize_third_usd !== null ? Number(tournament.prize_third_usd) : null;
+
+        // 1. Fetch registrations (approved + pending)
+        const [regResults] = await db.promise().query(
+            `SELECT r.registration_id, r.status, r.seed_number, r.registered_at, r.approved_at,
+                    tm.team_id, tm.team_name, tm.team_tag
+             FROM REGISTRATION r
+             JOIN TEAM tm ON r.team_id = tm.team_id
+             WHERE r.tournament_id = ? AND r.status IN ('approved', 'pending')
+             ORDER BY FIELD(r.status, 'approved', 'pending'), COALESCE(r.seed_number, 999999) ASC, r.registered_at ASC`,
+            [tournamentId]
+        );
+
+        // Fetch rosters for all registered teams
+        const teamIds = regResults.map((r) => r.team_id);
+        const membersByTeam = {};
+
+        if (teamIds.length > 0) {
+            const [memberResults] = await db.promise().query(
+                `SELECT tm.team_id, tm.member_id, tm.role, tm.assigned_role, tm.is_substitute, tm.is_active,
+                        ga.account_id AS game_account_id, ga.game_username, ga.game_uid, ga.server_region,
+                        u.user_id, u.username
+                 FROM TEAM_MEMBER tm
+                 JOIN GAME_ACCOUNT ga ON tm.game_account_id = ga.account_id
+                 JOIN USER u ON ga.user_id = u.user_id
+                 WHERE tm.team_id IN (?)
+                 ORDER BY FIELD(tm.role, 'captain', 'player', 'substitute'), tm.is_substitute ASC, tm.is_active DESC`,
+                [teamIds]
+            );
+
+            for (const m of memberResults) {
+                if (!membersByTeam[m.team_id]) {
+                    membersByTeam[m.team_id] = [];
+                }
+                membersByTeam[m.team_id].push({
+                    user_id: m.user_id,
+                    username: m.username,
+                    game_account_id: m.game_account_id,
+                    game_username: m.game_username,
+                    game_uid: m.game_uid,
+                    server_region: m.server_region,
+                    role: m.role,
+                    assigned_role: m.assigned_role,
+                    is_substitute: Boolean(m.is_substitute),
+                    is_active: Boolean(m.is_active)
+                });
+            }
+        }
+
+        // Fetch group membership info if any group stage exists
+        const [groupMemberRows] = await db.promise().query(
+            `SELECT sgm.registration_id, sgm.slot_number, sgm.final_rank, sgm.qualified, sgm.playoff_seed,
+                    sg.group_id, sg.group_name, sg.group_order
+             FROM STAGE_GROUP_MEMBER sgm
+             JOIN STAGE_GROUP sg ON sgm.group_id = sg.group_id
+             JOIN TOURNAMENT_STAGE ts ON sgm.stage_id = ts.stage_id
+             WHERE ts.tournament_id = ?`,
+            [tournamentId]
+        );
+
+        const groupInfoByReg = {};
+        groupMemberRows.forEach((gm) => {
+            groupInfoByReg[gm.registration_id] = {
+                group_id: gm.group_id,
+                group_name: gm.group_name,
+                group_order: gm.group_order,
+                slot_number: gm.slot_number,
+                final_rank: gm.final_rank,
+                qualified: Boolean(gm.qualified),
+                playoff_seed: gm.playoff_seed
+            };
+        });
+
+        let approvedIndex = 0;
+        const participants = regResults.map((r) => {
+            const isApproved = r.status === "approved";
+            if (isApproved) approvedIndex += 1;
+            const gInfo = groupInfoByReg[r.registration_id] || null;
+            return {
+                registration_id: r.registration_id,
+                status: r.status,
+                seed_number: r.seed_number || (isApproved ? approvedIndex : null),
+                registered_at: r.registered_at,
+                approved_at: r.approved_at,
+                team_id: r.team_id,
+                team_name: r.team_name,
+                team_tag: r.team_tag,
+                group_info: gInfo,
+                roster: membersByTeam[r.team_id] || []
+            };
+        });
+
+        // 2. Fetch all matches across all stages for this tournament
+        const [matchRows] = await db.promise().query(
+            `SELECT m.match_id, m.stage_id, m.group_id, m.status, m.round_number, m.bracket_position, m.bracket_type,
+                    m.scheduled_time, m.lobby_code, m.server_region, m.draft_mode,
+                    ts.stage_name, ts.stage_format, ts.stage_order,
+                    sg.group_name,
+                    mr.status AS result_status, mr.winning_registration_id,
+                    mr.team_a_kills, mr.team_b_kills, mr.evidence_url, mr.submitted_at, mr.verified_at,
+                    ms.best_of
+             FROM \`MATCH\` m
+             JOIN TOURNAMENT_STAGE ts ON m.stage_id = ts.stage_id
+             LEFT JOIN STAGE_GROUP sg ON m.group_id = sg.group_id
+             LEFT JOIN MATCH_RESULT mr ON m.match_id = mr.match_id
+             LEFT JOIN MOBA_SERIES ms ON m.match_id = ms.match_id
+             WHERE ts.tournament_id = ?
+             ORDER BY ts.stage_order ASC,
+                      FIELD(m.bracket_type, 'group', 'play_in', 'upper', 'lower', 'grand_final'),
+                      m.round_number ASC,
+                      m.bracket_position ASC`,
+            [tournamentId]
+        );
+
+        const matchIds = matchRows.map((m) => m.match_id);
+        const matchPartsMap = new Map();
+
+        if (matchIds.length > 0) {
+            const [mpRows] = await db.promise().query(
+                `SELECT mp.match_id, mp.registration_id, mp.side, tm.team_id, tm.team_name, tm.team_tag
+                 FROM MATCH_PARTICIPANT mp
+                 JOIN REGISTRATION r ON mp.registration_id = r.registration_id
+                 JOIN TEAM tm ON r.team_id = tm.team_id
+                 WHERE mp.match_id IN (?)
+                 ORDER BY mp.side ASC`,
+                [matchIds]
+            );
+
+            mpRows.forEach((p) => {
+                if (!matchPartsMap.has(p.match_id)) matchPartsMap.set(p.match_id, []);
+                matchPartsMap.get(p.match_id).push({
+                    registration_id: p.registration_id,
+                    team_id: p.team_id,
+                    team_name: p.team_name,
+                    team_tag: p.team_tag,
+                    side: p.side
+                });
+            });
+        }
+
+        const formattedMatches = matchRows.map((m) => ({
+            match_id: m.match_id,
+            stage_id: m.stage_id,
+            stage_name: m.stage_name,
+            stage_format: m.stage_format,
+            stage_order: m.stage_order,
+            group_id: m.group_id,
+            group_name: m.group_name || null,
+            bracket_type: m.bracket_type,
+            round_number: m.round_number,
+            bracket_position: m.bracket_position,
+            status: m.status,
+            scheduled_time: m.scheduled_time || null,
+            lobby_code: m.lobby_code || null,
+            server_region: m.server_region || null,
+            draft_mode: m.draft_mode || null,
+            result_status: m.result_status || null,
+            winning_registration_id: m.winning_registration_id || null,
+            team_a_kills: m.team_a_kills != null ? Number(m.team_a_kills) : null,
+            team_b_kills: m.team_b_kills != null ? Number(m.team_b_kills) : null,
+            evidence_url: m.evidence_url || null,
+            submitted_at: m.submitted_at || null,
+            verified_at: m.verified_at || null,
+            best_of: m.best_of || "BO1",
+            participants: matchPartsMap.get(m.match_id) || []
+        }));
+
+        // 3. Calculate Overall Tournament Standings & Placements for Approved Teams
+        const approvedParticipants = participants.filter((p) => p.status === "approved");
+        const statsByReg = new Map();
+
+        approvedParticipants.forEach((p) => {
+            statsByReg.set(Number(p.registration_id), {
+                registration_id: p.registration_id,
+                team_id: p.team_id,
+                team_name: p.team_name,
+                team_tag: p.team_tag,
+                seed_number: p.seed_number,
+                group_name: p.group_info?.group_name || null,
+                played: 0,
+                wins: 0,
+                losses: 0,
+                win_rate: 0,
+                total_kills: 0,
+                total_conceded: 0,
+                kill_difference: 0,
+                bracket_status: formattedMatches.length > 0 ? "ACTIVE" : "REGISTERED",
+                placement: null,
+                placement_label: null,
+                prize_usd: null
+            });
+        });
+
+        // Track highest active bracket type and elimination state per team
+        const maxUpperRound = Math.max(0, ...formattedMatches.filter((m) => m.bracket_type === "upper").map((m) => m.round_number || 1));
+        const maxLowerRound = Math.max(0, ...formattedMatches.filter((m) => m.bracket_type === "lower").map((m) => m.round_number || 1));
+        const hasLowerBracket = formattedMatches.some((m) => m.bracket_type === "lower");
+
+        formattedMatches.forEach((m) => {
+            const isVerified = m.status === "completed" || m.result_status === "VERIFIED";
+            const sideA = m.participants.find((p) => p.side === "A");
+            const sideB = m.participants.find((p) => p.side === "B");
+
+            if (isVerified && m.winning_registration_id && sideA && sideB) {
+                const winId = Number(m.winning_registration_id);
+                const statA = statsByReg.get(Number(sideA.registration_id));
+                const statB = statsByReg.get(Number(sideB.registration_id));
+                const killsA = m.team_a_kills != null ? Number(m.team_a_kills) : 0;
+                const killsB = m.team_b_kills != null ? Number(m.team_b_kills) : 0;
+
+                if (statA) {
+                    statA.played += 1;
+                    statA.total_kills += killsA;
+                    statA.total_conceded += killsB;
+                    if (winId === Number(sideA.registration_id)) {
+                        statA.wins += 1;
+                    } else {
+                        statA.losses += 1;
+                    }
+                }
+
+                if (statB) {
+                    statB.played += 1;
+                    statB.total_kills += killsB;
+                    statB.total_conceded += killsA;
+                    if (winId === Number(sideB.registration_id)) {
+                        statB.wins += 1;
+                    } else {
+                        statB.losses += 1;
+                    }
+                }
+
+                const loserId = winId === Number(sideA.registration_id) ? Number(sideB.registration_id) : Number(sideA.registration_id);
+                const winnerStat = statsByReg.get(winId);
+                const loserStat = statsByReg.get(loserId);
+
+                // Determine placements from key elimination matches
+                if (m.bracket_type === "grand_final") {
+                    if (winnerStat) {
+                        winnerStat.placement = 1;
+                        winnerStat.placement_label = "1st Place";
+                        winnerStat.bracket_status = "CHAMPION";
+                    }
+                    if (loserStat) {
+                        loserStat.placement = 2;
+                        loserStat.placement_label = "2nd Place";
+                        loserStat.bracket_status = "RUNNER_UP";
+                    }
+                } else if (m.bracket_type === "lower") {
+                    if (loserStat) {
+                        if (m.round_number === maxLowerRound) {
+                            loserStat.placement = 3;
+                            loserStat.placement_label = "3rd Place";
+                            loserStat.bracket_status = "3RD_PLACE";
+                        } else if (m.round_number === maxLowerRound - 1 && maxLowerRound >= 2) {
+                            loserStat.placement = 4;
+                            loserStat.placement_label = "4th Place";
+                            loserStat.bracket_status = "4TH_PLACE";
+                        } else {
+                            loserStat.bracket_status = "ELIMINATED";
+                        }
+                    }
+                } else if (m.bracket_type === "play_in") {
+                    if (loserStat) {
+                        loserStat.bracket_status = "ELIMINATED";
+                    }
+                } else if (m.bracket_type === "upper" && !hasLowerBracket) {
+                    // Single Elimination
+                    if (m.round_number === maxUpperRound) {
+                        if (winnerStat) {
+                            winnerStat.placement = 1;
+                            winnerStat.placement_label = "1st Place";
+                            winnerStat.bracket_status = "CHAMPION";
+                        }
+                        if (loserStat) {
+                            loserStat.placement = 2;
+                            loserStat.placement_label = "2nd Place";
+                            loserStat.bracket_status = "RUNNER_UP";
+                        }
+                    } else if (m.round_number === maxUpperRound - 1 && maxUpperRound >= 2) {
+                        if (loserStat) {
+                            loserStat.placement = 3;
+                            loserStat.placement_label = "3rd-4th Place";
+                            loserStat.bracket_status = "SEMIFINALIST";
+                        }
+                    } else if (loserStat) {
+                        loserStat.bracket_status = "ELIMINATED";
+                    }
+                }
+            }
+        });
+
+        // For teams not yet eliminated or placed, check their current active match bracket
+        formattedMatches.forEach((m) => {
+            const isVerified = m.status === "completed" || m.result_status === "VERIFIED";
+            if (!isVerified) {
+                m.participants.forEach((p) => {
+                    const st = statsByReg.get(Number(p.registration_id));
+                    if (st && !["CHAMPION", "RUNNER_UP", "3RD_PLACE", "4TH_PLACE", "SEMIFINALIST", "ELIMINATED"].includes(st.bracket_status)) {
+                        if (m.bracket_type === "grand_final") {
+                            st.bracket_status = "GRAND_FINALIST";
+                        } else if (m.bracket_type === "lower") {
+                            st.bracket_status = "LOWER_BRACKET";
+                        } else if (m.bracket_type === "upper") {
+                            st.bracket_status = "UPPER_BRACKET";
+                        } else if (m.bracket_type === "play_in") {
+                            st.bracket_status = "PLAY_IN";
+                        } else if (m.bracket_type === "group") {
+                            st.bracket_status = "GROUP_STAGE";
+                        }
+                    }
+                });
+            }
+        });
+
+        const STATUS_PRIORITY = {
+            CHAMPION: 1,
+            RUNNER_UP: 2,
+            "3RD_PLACE": 3,
+            SEMIFINALIST: 3,
+            "4TH_PLACE": 4,
+            GRAND_FINALIST: 5,
+            UPPER_BRACKET: 6,
+            LOWER_BRACKET: 7,
+            PLAY_IN: 8,
+            GROUP_STAGE: 9,
+            ACTIVE: 10,
+            REGISTERED: 11,
+            ELIMINATED: 12
+        };
+
+        const standingsList = Array.from(statsByReg.values()).map((s) => {
+            s.kill_difference = s.total_kills - s.total_conceded;
+            s.win_rate = s.played > 0 ? Math.round((s.wins / s.played) * 100) : 0;
+            if (s.placement === 1 && prizeFirst !== null) {
+                s.prize_usd = prizeFirst;
+            } else if (s.placement === 2 && prizeSecond !== null) {
+                s.prize_usd = prizeSecond;
+            } else if ((s.bracket_status === "3RD_PLACE" || s.bracket_status === "SEMIFINALIST") && prizeThird !== null) {
+                s.prize_usd = prizeThird;
+            }
+            return s;
+        });
+
+        standingsList.sort((a, b) => {
+            if (a.placement !== null && b.placement !== null && a.placement !== b.placement) {
+                return a.placement - b.placement;
+            }
+            if (a.placement !== null && b.placement === null) return -1;
+            if (a.placement === null && b.placement !== null) return 1;
+
+            const prioA = STATUS_PRIORITY[a.bracket_status] || 99;
+            const prioB = STATUS_PRIORITY[b.bracket_status] || 99;
+            if (prioA !== prioB) return prioA - prioB;
+
+            if (b.wins !== a.wins) return b.wins - a.wins;
+            if (b.kill_difference !== a.kill_difference) return b.kill_difference - a.kill_difference;
+            if (b.total_kills !== a.total_kills) return b.total_kills - a.total_kills;
+            return (a.seed_number || 999) - (b.seed_number || 999);
+        });
+
+        standingsList.forEach((s, idx) => {
+            s.rank = idx + 1;
+        });
+
+        return res.status(200).json({
+            tournamentId: Number(tournamentId),
+            prize_pool_usd: prizePool,
+            prize_first_usd: prizeFirst,
+            prize_second_usd: prizeSecond,
+            prize_third_usd: prizeThird,
+            participants,
+            matches: formattedMatches,
+            standings: standingsList
+        });
+    } catch (err) {
+        console.error("Failed to fetch tournament hub data:", err);
+        return res.status(500).json({
+            error: "FAILED TO FETCH TOURNAMENT HUB DATA",
+            code: "INTERNAL_SERVER_ERROR"
+        });
+    }
 });
 
 /**
@@ -276,11 +713,21 @@ router.get("/:tournamentId/results/pending", requireAuth, requireRole("organizer
 /**
  * POST /api/tournaments
  * Organizer-only. Creates a new tournament, always starting in "draft".
- * Validates game_id, format, timeline, and prize_pool_usd.
+ * Validates game_id, format, timeline, and prize_pool_usd + 1st/2nd/3rd prizes.
  */
 router.post("/", requireAuth, requireRole("organizer"), (req, res) => {
     const organizerId = req.session.userId;
-    const { game_id, name, format, registration_start_at, registration_end_at, prize_pool_usd } = req.body;
+    const {
+        game_id,
+        name,
+        format,
+        registration_start_at,
+        registration_end_at,
+        prize_pool_usd,
+        prize_first_usd,
+        prize_second_usd,
+        prize_third_usd
+    } = req.body;
 
     if (!game_id || !name || !format) {
         return res.status(400).json({
@@ -296,8 +743,33 @@ router.post("/", requireAuth, requireRole("organizer"), (req, res) => {
 
     const prizeCheck = validatePrizePool(prize_pool_usd);
     if (!prizeCheck.valid) {
+        return res.status(400).json({ error: prizeCheck.error, code: "INVALID_PRIZE_POOL" });
+    }
+    const firstCheck = validatePrizePool(prize_first_usd);
+    if (!firstCheck.valid) {
+        return res.status(400).json({ error: `1ST PRIZE: ${firstCheck.error}`, code: "INVALID_PRIZE_POOL" });
+    }
+    const secondCheck = validatePrizePool(prize_second_usd);
+    if (!secondCheck.valid) {
+        return res.status(400).json({ error: `2ND PRIZE: ${secondCheck.error}`, code: "INVALID_PRIZE_POOL" });
+    }
+    const thirdCheck = validatePrizePool(prize_third_usd);
+    if (!thirdCheck.valid) {
+        return res.status(400).json({ error: `3RD PRIZE: ${thirdCheck.error}`, code: "INVALID_PRIZE_POOL" });
+    }
+
+    const p1 = firstCheck.value;
+    const p2 = secondCheck.value;
+    const p3 = thirdCheck.value;
+    const hasBreakdown = p1 !== null || p2 !== null || p3 !== null;
+    const breakdownSum = (p1 || 0) + (p2 || 0) + (p3 || 0);
+
+    let effectiveTotalPrize = prizeCheck.value;
+    if (effectiveTotalPrize === null && hasBreakdown) {
+        effectiveTotalPrize = breakdownSum;
+    } else if (effectiveTotalPrize !== null && hasBreakdown && breakdownSum > effectiveTotalPrize + 0.001) {
         return res.status(400).json({
-            error: prizeCheck.error,
+            error: `SUM OF 1ST, 2ND, AND 3RD PRIZES ($${breakdownSum}) CANNOT EXCEED TOTAL PRIZE POOL ($${effectiveTotalPrize})`,
             code: "INVALID_PRIZE_POOL"
         });
     }
@@ -331,38 +803,59 @@ router.post("/", requireAuth, requireRole("organizer"), (req, res) => {
         }
 
         const insertSql = `
-            INSERT INTO TOURNAMENT (game_id, organizer_id, name, format, status, registration_start_at, registration_end_at, prize_pool_usd)
-            VALUES (?, ?, ?, ?, 'draft', ?, ?, ?)
+            INSERT INTO TOURNAMENT (
+                game_id, organizer_id, name, format, status,
+                registration_start_at, registration_end_at,
+                prize_pool_usd, prize_first_usd, prize_second_usd, prize_third_usd
+            )
+            VALUES (?, ?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?)
         `;
 
-        db.query(insertSql, [game_id, organizerId, name, format, normStart, normEnd, prizeCheck.value], (err, result) => {
-            if (err) {
-                console.error(err);
-                return res.status(500).json({
-                    error: "FAILED TO CREATE TOURNAMENT"
+        db.query(
+            insertSql,
+            [game_id, organizerId, name, format, normStart, normEnd, effectiveTotalPrize, p1, p2, p3],
+            (err, result) => {
+                if (err) {
+                    console.error(err);
+                    return res.status(500).json({
+                        error: "FAILED TO CREATE TOURNAMENT"
+                    });
+                }
+
+                return res.status(201).json({
+                    message: "TOURNAMENT CREATED SUCCESSFULLY",
+                    tournamentId: result.insertId,
+                    registration_start_at: normStart,
+                    registration_end_at: normEnd,
+                    prize_pool_usd: effectiveTotalPrize,
+                    prize_first_usd: p1,
+                    prize_second_usd: p2,
+                    prize_third_usd: p3
                 });
             }
-
-            return res.status(201).json({
-                message: "TOURNAMENT CREATED SUCCESSFULLY",
-                tournamentId: result.insertId,
-                registration_start_at: normStart,
-                registration_end_at: normEnd,
-                prize_pool_usd: prizeCheck.value
-            });
-        });
+        );
     });
 });
 
 /**
  * PUT /api/tournaments/:id
- * Organizer-only, owner-only. Edits name/game/format/timeline/prize_pool_usd.
- * Only allowed while the tournament is still in "draft".
+ * Organizer-only, owner-only. Edits name/game/format/timeline/prize_pool_usd + 1st/2nd/3rd prizes.
+ * Allowed while tournament is in draft or published status.
  */
 router.put("/:id", requireAuth, requireRole("organizer"), (req, res) => {
     const tournamentId = req.params.id;
     const organizerId = req.session.userId;
-    const { game_id, name, format, registration_start_at, registration_end_at, prize_pool_usd } = req.body;
+    const {
+        game_id,
+        name,
+        format,
+        registration_start_at,
+        registration_end_at,
+        prize_pool_usd,
+        prize_first_usd,
+        prize_second_usd,
+        prize_third_usd
+    } = req.body;
 
     if (!game_id || !name || !format) {
         return res.status(400).json({
@@ -378,8 +871,33 @@ router.put("/:id", requireAuth, requireRole("organizer"), (req, res) => {
 
     const prizeCheck = validatePrizePool(prize_pool_usd);
     if (!prizeCheck.valid) {
+        return res.status(400).json({ error: prizeCheck.error, code: "INVALID_PRIZE_POOL" });
+    }
+    const firstCheck = validatePrizePool(prize_first_usd);
+    if (!firstCheck.valid) {
+        return res.status(400).json({ error: `1ST PRIZE: ${firstCheck.error}`, code: "INVALID_PRIZE_POOL" });
+    }
+    const secondCheck = validatePrizePool(prize_second_usd);
+    if (!secondCheck.valid) {
+        return res.status(400).json({ error: `2ND PRIZE: ${secondCheck.error}`, code: "INVALID_PRIZE_POOL" });
+    }
+    const thirdCheck = validatePrizePool(prize_third_usd);
+    if (!thirdCheck.valid) {
+        return res.status(400).json({ error: `3RD PRIZE: ${thirdCheck.error}`, code: "INVALID_PRIZE_POOL" });
+    }
+
+    const p1 = firstCheck.value;
+    const p2 = secondCheck.value;
+    const p3 = thirdCheck.value;
+    const hasBreakdown = p1 !== null || p2 !== null || p3 !== null;
+    const breakdownSum = (p1 || 0) + (p2 || 0) + (p3 || 0);
+
+    let effectiveTotalPrize = prizeCheck.value;
+    if (effectiveTotalPrize === null && hasBreakdown) {
+        effectiveTotalPrize = breakdownSum;
+    } else if (effectiveTotalPrize !== null && hasBreakdown && breakdownSum > effectiveTotalPrize + 0.001) {
         return res.status(400).json({
-            error: prizeCheck.error,
+            error: `SUM OF 1ST, 2ND, AND 3RD PRIZES ($${breakdownSum}) CANNOT EXCEED TOTAL PRIZE POOL ($${effectiveTotalPrize})`,
             code: "INVALID_PRIZE_POOL"
         });
     }
@@ -418,9 +936,9 @@ router.put("/:id", requireAuth, requireRole("organizer"), (req, res) => {
             });
         }
 
-        if (results[0].status !== "draft") {
+        if (!["draft", "published"].includes(results[0].status)) {
             return res.status(400).json({
-                error: "ONLY DRAFT TOURNAMENTS CAN BE EDITED"
+                error: "ONLY DRAFT OR PUBLISHED TOURNAMENTS CAN BE EDITED"
             });
         }
 
@@ -442,22 +960,27 @@ router.put("/:id", requireAuth, requireRole("organizer"), (req, res) => {
 
             const updateSql = `
                 UPDATE TOURNAMENT
-                SET game_id = ?, name = ?, format = ?, registration_start_at = ?, registration_end_at = ?, prize_pool_usd = ?
+                SET game_id = ?, name = ?, format = ?, registration_start_at = ?, registration_end_at = ?,
+                    prize_pool_usd = ?, prize_first_usd = ?, prize_second_usd = ?, prize_third_usd = ?
                 WHERE tournament_id = ?
             `;
 
-            db.query(updateSql, [game_id, name, format, normStart, normEnd, prizeCheck.value, tournamentId], (err) => {
-                if (err) {
-                    console.error(err);
-                    return res.status(500).json({
-                        error: "FAILED TO UPDATE TOURNAMENT"
+            db.query(
+                updateSql,
+                [game_id, name, format, normStart, normEnd, effectiveTotalPrize, p1, p2, p3, tournamentId],
+                (err) => {
+                    if (err) {
+                        console.error(err);
+                        return res.status(500).json({
+                            error: "FAILED TO UPDATE TOURNAMENT"
+                        });
+                    }
+
+                    return res.status(200).json({
+                        message: "TOURNAMENT UPDATED SUCCESSFULLY"
                     });
                 }
-
-                return res.status(200).json({
-                    message: "TOURNAMENT UPDATED SUCCESSFULLY"
-                });
-            });
+            );
         });
     });
 });

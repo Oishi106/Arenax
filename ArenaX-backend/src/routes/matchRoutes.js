@@ -60,11 +60,12 @@ router.post("/:matchId/result", requireAuth, async (req, res) => {
         conn = await db.promise().getConnection();
         await conn.beginTransaction();
 
-        // 2. Fetch match and verify it exists & is group stage match
+        // 2. Fetch match and verify it exists & tournament is live
         const [matches] = await conn.query(
-            `SELECT m.match_id, m.stage_id, m.group_id, m.status, ts.tournament_id
+            `SELECT m.match_id, m.stage_id, m.group_id, m.status, ts.tournament_id, t.status AS tournament_status
              FROM \`MATCH\` m
              JOIN TOURNAMENT_STAGE ts ON m.stage_id = ts.stage_id
+             JOIN TOURNAMENT t ON ts.tournament_id = t.tournament_id
              WHERE m.match_id = ? FOR UPDATE`,
             [matchId]
         );
@@ -78,6 +79,15 @@ router.post("/:matchId/result", requireAuth, async (req, res) => {
         }
 
         const match = matches[0];
+
+        // Ensure tournament is live before accepting any match results
+        if (match.tournament_status !== "live") {
+            await conn.rollback();
+            return res.status(409).json({
+                error: `CANNOT SUBMIT RESULT: TOURNAMENT IS CURRENTLY '${match.tournament_status.toUpperCase()}'. MATCH RESULTS CAN ONLY BE SUBMITTED WHEN THE TOURNAMENT IS 'LIVE'.`,
+                code: "TOURNAMENT_NOT_LIVE"
+            });
+        }
 
         if (match.status === "completed") {
             await conn.rollback();
@@ -363,10 +373,15 @@ router.put("/:matchId/result/verify", requireAuth, requireRole("organizer"), asy
                 const targetRegId = adv.outcome_type === "winner" ? finalWinnerId : losingRegistrationId;
 
                 if (targetRegId) {
+                    // Prevent duplicate key errors by removing any existing row for this side or team in destination match
+                    await conn.query(
+                        `DELETE FROM MATCH_PARTICIPANT WHERE match_id = ? AND (side = ? OR registration_id = ?)`,
+                        [adv.destination_match_id, adv.destination_side, targetRegId]
+                    );
+
                     await conn.query(
                         `INSERT INTO MATCH_PARTICIPANT (match_id, registration_id, side)
-                         VALUES (?, ?, ?)
-                         ON DUPLICATE KEY UPDATE registration_id = VALUES(registration_id)`,
+                         VALUES (?, ?, ?)`,
                         [adv.destination_match_id, targetRegId, adv.destination_side]
                     );
 
@@ -498,6 +513,129 @@ router.put("/:matchId/result/reject", requireAuth, requireRole("organizer"), asy
         console.error(err);
         return res.status(500).json({
             error: "FAILED TO REJECT MATCH RESULT",
+            code: "INTERNAL_SERVER_ERROR"
+        });
+    } finally {
+        if (conn) conn.release();
+    }
+});
+
+/**
+ * PUT /api/matches/:matchId/schedule
+ * Organizer-only endpoint to update match schedule, lobby code, server region, draft mode, and series BO.
+ */
+router.put("/:matchId/schedule", requireAuth, requireRole("organizer"), async (req, res) => {
+    const matchId = req.params.matchId;
+    const organizerId = req.session.userId;
+    const { scheduled_time, lobby_code, server_region, draft_mode, best_of } = req.body;
+
+    let conn;
+    try {
+        conn = await db.promise().getConnection();
+        await conn.beginTransaction();
+
+        const [matches] = await conn.query(
+            `SELECT m.match_id, m.stage_id, m.status, t.organizer_id
+             FROM \`MATCH\` m
+             JOIN TOURNAMENT_STAGE ts ON m.stage_id = ts.stage_id
+             JOIN TOURNAMENT t ON ts.tournament_id = t.tournament_id
+             WHERE m.match_id = ? FOR UPDATE`,
+            [matchId]
+        );
+
+        if (matches.length === 0) {
+            await conn.rollback();
+            return res.status(404).json({
+                error: "MATCH NOT FOUND",
+                code: "NOT_FOUND"
+            });
+        }
+
+        const match = matches[0];
+        if (match.organizer_id !== organizerId) {
+            await conn.rollback();
+            return res.status(403).json({
+                error: "YOU DO NOT OWN THIS TOURNAMENT",
+                code: "FORBIDDEN"
+            });
+        }
+
+        // Validate scheduled_time if provided
+        let formattedTime = null;
+        if (scheduled_time) {
+            const parsed = new Date(scheduled_time);
+            if (isNaN(parsed.getTime())) {
+                await conn.rollback();
+                return res.status(400).json({
+                    error: "INVALID SCHEDULED TIME FORMAT",
+                    code: "INVALID_INPUT"
+                });
+            }
+            formattedTime = parsed.toISOString().slice(0, 19).replace("T", " ");
+        }
+
+        const cleanLobbyCode = lobby_code !== undefined ? (lobby_code ? String(lobby_code).trim().slice(0, 20) : null) : undefined;
+        const cleanServerRegion = server_region !== undefined ? (server_region ? String(server_region).trim().slice(0, 30) : null) : undefined;
+        const cleanDraftMode = draft_mode !== undefined ? (draft_mode ? String(draft_mode).trim().slice(0, 30) : null) : undefined;
+
+        await conn.query(
+            `UPDATE \`MATCH\`
+             SET scheduled_time = COALESCE(?, scheduled_time),
+                 lobby_code = COALESCE(?, lobby_code),
+                 server_region = COALESCE(?, server_region),
+                 draft_mode = COALESCE(?, draft_mode)
+             WHERE match_id = ?`,
+            [
+                scheduled_time !== undefined ? formattedTime : null,
+                cleanLobbyCode,
+                cleanServerRegion,
+                cleanDraftMode,
+                matchId
+            ]
+        );
+
+        // Explicitly clear field if null or empty string passed
+        if (scheduled_time === null || scheduled_time === "") {
+            await conn.query(`UPDATE \`MATCH\` SET scheduled_time = NULL WHERE match_id = ?`, [matchId]);
+        }
+        if (lobby_code === null || lobby_code === "") {
+            await conn.query(`UPDATE \`MATCH\` SET lobby_code = NULL WHERE match_id = ?`, [matchId]);
+        }
+        if (server_region === null || server_region === "") {
+            await conn.query(`UPDATE \`MATCH\` SET server_region = NULL WHERE match_id = ?`, [matchId]);
+        }
+        if (draft_mode === null || draft_mode === "") {
+            await conn.query(`UPDATE \`MATCH\` SET draft_mode = NULL WHERE match_id = ?`, [matchId]);
+        }
+
+        if (best_of && ["BO1", "BO3", "BO5"].includes(best_of.toUpperCase())) {
+            await conn.query(
+                `INSERT INTO MOBA_SERIES (match_id, best_of)
+                 VALUES (?, ?)
+                 ON DUPLICATE KEY UPDATE best_of = VALUES(best_of)`,
+                [matchId, best_of.toUpperCase()]
+            );
+        }
+
+        await conn.commit();
+
+        const [updatedRows] = await db.promise().query(
+            `SELECT m.match_id, m.scheduled_time, m.lobby_code, m.server_region, m.draft_mode, ms.best_of
+             FROM \`MATCH\` m
+             LEFT JOIN MOBA_SERIES ms ON m.match_id = ms.match_id
+             WHERE m.match_id = ?`,
+            [matchId]
+        );
+
+        return res.status(200).json({
+            message: "Match schedule and lobby updated successfully",
+            match: updatedRows[0]
+        });
+    } catch (err) {
+        if (conn) await conn.rollback();
+        console.error(err);
+        return res.status(500).json({
+            error: "FAILED TO UPDATE MATCH SCHEDULE",
             code: "INTERNAL_SERVER_ERROR"
         });
     } finally {
