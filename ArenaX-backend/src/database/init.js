@@ -212,7 +212,7 @@ function createTables() {
             stage_order INT NOT NULL,
             stage_name VARCHAR(50) NOT NULL,
             stage_format ENUM('group_stage', 'single_elimination', 'double_elimination') NOT NULL,
-            group_generation_status ENUM('not_generated', 'groups_assigned', 'matches_generated') NOT NULL DEFAULT 'not_generated',
+            group_generation_status ENUM('not_generated', 'groups_assigned', 'matches_generated', 'qualified', 'bracket_generated') NOT NULL DEFAULT 'not_generated',
             group_assignment_mode ENUM('sequential', 'random') NULL,
             groups_generated_at DATETIME NULL,
 
@@ -220,6 +220,28 @@ function createTables() {
 
             FOREIGN KEY (tournament_id)
                 REFERENCES TOURNAMENT(tournament_id)
+                ON DELETE CASCADE
+        )
+        `,
+
+        `
+        CREATE TABLE IF NOT EXISTS REGISTRATION (
+            registration_id INT AUTO_INCREMENT PRIMARY KEY,
+            tournament_id INT NOT NULL,
+            team_id INT NOT NULL,
+            status ENUM('pending', 'approved', 'rejected') NOT NULL DEFAULT 'pending',
+            seed_number INT,
+            registered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            approved_at TIMESTAMP NULL,
+
+            UNIQUE (tournament_id, team_id),
+
+            FOREIGN KEY (tournament_id)
+                REFERENCES TOURNAMENT(tournament_id)
+                ON DELETE CASCADE,
+
+            FOREIGN KEY (team_id)
+                REFERENCES TEAM(team_id)
                 ON DELETE CASCADE
         )
         `,
@@ -250,6 +272,8 @@ function createTables() {
             slot_number TINYINT NOT NULL,
             final_rank TINYINT NULL,
             qualified BOOLEAN NULL,
+            playoff_seed INT NULL,
+            bye_status BOOLEAN NOT NULL DEFAULT FALSE,
 
             CHECK (slot_number BETWEEN 1 AND 4),
 
@@ -269,33 +293,11 @@ function createTables() {
 
         
         `
-        CREATE TABLE IF NOT EXISTS REGISTRATION (
-            registration_id INT AUTO_INCREMENT PRIMARY KEY,
-            tournament_id INT NOT NULL,
-            team_id INT NOT NULL,
-            status ENUM('pending', 'approved', 'rejected') NOT NULL DEFAULT 'pending',
-            seed_number INT,
-            registered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            approved_at TIMESTAMP NULL,
-
-            UNIQUE (tournament_id, team_id),
-
-            FOREIGN KEY (tournament_id)
-                REFERENCES TOURNAMENT(tournament_id)
-                ON DELETE CASCADE,
-
-            FOREIGN KEY (team_id)
-                REFERENCES TEAM(team_id)
-                ON DELETE CASCADE
-        )
-        `,
-
-        
-        `
         CREATE TABLE IF NOT EXISTS \`MATCH\` (
             match_id INT AUTO_INCREMENT PRIMARY KEY,
             stage_id INT NOT NULL,
             group_id INT NULL,
+            bracket_type ENUM('group', 'play_in', 'upper', 'lower', 'grand_final') DEFAULT 'group',
             status ENUM('scheduled', 'live', 'completed') NOT NULL DEFAULT 'scheduled',
             scheduled_time TIMESTAMP NULL,
             lobby_code VARCHAR(20),
